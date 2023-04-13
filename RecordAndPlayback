@@ -1,0 +1,103 @@
+package com.guang.channel.opt.dependency.service.com.mp.util;
+
+import com.guang.mp.api.channelsshop.response.BaseResponse;
+import com.youzan.platform.service_chain.concurrent.FrameworkThreadPoolExecutor;
+import com.youzan.util.NamedThreadFactory;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+
+/**
+ * @author chuzhen
+ * @since 2023/4/12 15:49
+ */
+@Slf4j
+public class ChannelsShopRecordUtil {
+
+    private static ThreadLocal<Boolean> switchThreadLocal = new ThreadLocal<>();
+
+    private static ThreadLocal<Map<String, BaseResponse>> responseThreadLocal = new ThreadLocal<>();
+
+    private static ThreadLocal<Map<String, Boolean>> statusThreadLocal = new ThreadLocal<>();
+
+    private static FrameworkThreadPoolExecutor frameworkThreadPoolExecutor = new FrameworkThreadPoolExecutor(50, 50, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1000), new NamedThreadFactory("ChannelsShopRecord", 0), new FrameworkThreadPoolExecutor.CallerRunsPolicy());
+
+    public static void startRecord(){
+        switchThreadLocal.set(Boolean.TRUE);
+    }
+
+    public static boolean needRecord(){
+        return Boolean.TRUE.equals(switchThreadLocal.get());
+    }
+
+    public static boolean recorded(String method){
+        return Boolean.TRUE.equals(Optional.ofNullable(statusThreadLocal.get()).map(map -> map.get(method)).orElse(null));
+    }
+
+    public static void recordResponse(String method, BaseResponse response){
+        Map<String, BaseResponse> responseMap = computeIfAbsent(responseThreadLocal, HashMap::new);
+        Map<String, Boolean> statusMap = computeIfAbsent(statusThreadLocal, HashMap::new);
+        responseMap.put(method, response);
+        statusMap.put(method, Boolean.TRUE);
+    }
+
+    public static <T extends BaseResponse> T playbackResponse(String method){
+        Map<String, BaseResponse> responseMap = responseThreadLocal.get();
+        if (Objects.isNull(responseMap)){
+            return null;
+        }
+        return (T) responseMap.get(method);
+    }
+
+    public static void endRecord(){
+        switchThreadLocal.remove();
+        responseThreadLocal.remove();
+        statusThreadLocal.remove();
+    }
+
+    public static void execute(Runnable runnable){
+        frameworkThreadPoolExecutor.execute(new ChannelsShopRecordRunnable(runnable));
+    }
+
+    private static <T> T computeIfAbsent(ThreadLocal<T> tThreadLocal, Supplier<T> supplier){
+        T t = tThreadLocal.get();
+        if (Objects.isNull(t)){
+            t = supplier.get();
+            tThreadLocal.set(t);
+        }
+        return t;
+    }
+
+    public static class ChannelsShopRecordRunnable implements Runnable{
+        private final Runnable runnable;
+        private final Boolean aSwitch;
+        private final Map<String, Boolean> status;
+        private final Map<String, BaseResponse> baseResponse;
+
+        public ChannelsShopRecordRunnable(Runnable runnable){
+            this.runnable = runnable;
+            this.aSwitch = ChannelsShopRecordUtil.switchThreadLocal.get();
+            this.status = ChannelsShopRecordUtil.statusThreadLocal.get();
+            this.baseResponse = ChannelsShopRecordUtil.responseThreadLocal.get();
+        }
+        @Override
+        public void run() {
+            try {
+                ChannelsShopRecordUtil.switchThreadLocal.set(aSwitch);
+                ChannelsShopRecordUtil.statusThreadLocal.set(status);
+                ChannelsShopRecordUtil.responseThreadLocal.set(baseResponse);
+                runnable.run();
+            } catch (Exception e){
+                log.error("ChannelsShopRecordRunnable run error", e);
+            } finally {
+                ChannelsShopRecordUtil.endRecord();
+            }
+        }
+    }
+}
